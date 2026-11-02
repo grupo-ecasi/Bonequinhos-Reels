@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Spike S5 — Vozes pt-BR no navegador</title>
+<style>body{font:14px system-ui;background:#111;color:#eee;padding:16px}pre{background:#1b1b1b;padding:12px;white-space:pre-wrap}</style>
+</head>
+<body>
+<h2>S5 — Piper × Kokoro (pt-BR) em file://</h2>
+<pre id="log"></pre>
+<script type="module">
+const logEl = document.getElementById("log");
+const R = (window.__s5 = { log: [], results: {} });
+const log = (...a) => { const s = a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "); R.log.push(s); logEl.textContent += s + "\n"; console.log("[S5]", s); };
+const TEXT = "Rebocou ontem? Já pode pintar? Ainda não. Seco por fora não é parede pronta. Camada um: esperar. Vinte e oito dias de cura. A ene bê erre treze mil duzentos e quarenta e cinco pede esperar a cura do reboco antes de pintar.";
+const PIPER_WASM = "https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize";
+
+function download(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+function wav(samples, sr) {
+  const n = samples.length, v = new DataView(new ArrayBuffer(44 + n * 2));
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  return new Blob([v.buffer], { type: "audio/wav" });
+}
+
+// Fonemização espeak-ng pt-br via piper_phonemize (o mesmo WASM do vits-web)
+async function phonemizePtBr(text) {
+  const mod = await import("https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/dist/piper-DeOu3H9E.js/+esm").catch(() => null);
+  if (!mod) throw new Error("piper-phonemize não carregou");
+  return await new Promise(async (resolve, reject) => {
+    (await mod.createPiperPhonemize({
+      print: (l) => resolve(JSON.parse(l)),
+      printErr: (l) => reject(new Error(l)),
+      locateFile: (l) => (l.endsWith(".wasm") ? `${PIPER_WASM}.wasm` : l.endsWith(".data") ? `${PIPER_WASM}.data` : l),
+    })).callMain(["-l", "pt-br", "--input", JSON.stringify([{ text }]), "--espeak_data", "/espeak-ng-data"]);
+  });
+}
+
+async function testPiper(voiceId) {
+  const t0 = performance.now();
+  const vits = await import("https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/+esm");
+  let lastPct = -1, bytes = 0;
+  const blob = await vits.predict({ text: TEXT, voiceId }, (p) => { bytes = p.total; const pct = Math.round((p.loaded / p.total) * 100); if (pct % 25 === 0 && pct !== lastPct) { lastPct = pct; log(`${voiceId} baixando ${pct}%`); } });
+  const t1 = performance.now();
+  const blob2 = await vits.predict({ text: TEXT, voiceId });
+  const t2 = performance.now();
+  const ab = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
+  const r = { voiceId, modelMB: +(bytes / 1048576).toFixed(1), firstMs: Math.round(t1 - t0), secondMs: Math.round(t2 - t1), audioSec: +ab.duration.toFixed(2) };
+  r.rtf = +((r.secondMs / 1000) / r.audioSec).toFixed(2);
+  R.results[voiceId] = r; log(r);
+  download(blob, `s5-${voiceId}.wav`);
+}
+
+async function testKokoro(voice) {
+  const t0 = performance.now();
+  const ph = await phonemizePtBr(TEXT);
+  log("fonemas pt-br (chaves)", Object.keys(ph), "→", (ph.phonemes || []).join("").slice(0, 160));
+  const { KokoroTTS } = await import("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm");
+  const tts = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: "q8", device: "wasm" });
+  const t1 = performance.now();
+  const phon = Array.isArray(ph.phonemes) ? ph.phonemes.join("") : String(ph.phonemes || "");
+  const { input_ids } = tts.tokenizer(phon, { truncation: true });
+  const audio = await tts.generate_from_ids(input_ids, { voice, speed: 1 });
+  const t2 = performance.now();
+  const sr = audio.sampling_rate, data = audio.audio;
+  const r = { voice, loadMs: Math.round(t1 - t0), genMs: Math.round(t2 - t1), audioSec: +(data.length / sr).toFixed(2), sr };
+  r.rtf = +((r.genMs / 1000) / r.audioSec).toFixed(2);
+  R.results["kokoro-" + voice] = r; log(r);
+  download(wav(data, sr), `s5-kokoro-${voice}.wav`);
+  R.kokoro = tts;
+}
+
+R.run = async (which) => {
+  try {
+    if (which === "piper-faber") await testPiper("pt_BR-faber-medium");
+    if (which === "piper-edresson") await testPiper("pt_BR-edresson-low");
+    if (which === "kokoro-dora") await testKokoro("pf_dora");
+    if (which === "kokoro-alex") {
+      if (!R.kokoro) await testKokoro("pm_alex");
+      else { const ph = await phonemizePtBr(TEXT); const { input_ids } = R.kokoro.tokenizer(ph.phonemes.join(""), { truncation: true }); const t = performance.now(); const a = await R.kokoro.generate_from_ids(input_ids, { voice: "pm_alex" }); const r = { voice: "pm_alex", genMs: Math.round(performance.now() - t), audioSec: +(a.audio.length / a.sampling_rate).toFixed(2) }; R.results["kokoro-pm_alex"] = r; log(r); download(wav(a.audio, a.sampling_rate), "s5-kokoro-pm_alex.wav"); }
+    }
+    if (which === "phon") { const ph = await phonemizePtBr(TEXT); log(ph); }
+  } catch (e) { log("ERRO", which, String(e && e.stack || e)); R.results[which] = { error: String(e) }; }
+  return R.results;
+};
+R.ready = true;
+log("pronto; isSecureContext=" + isSecureContext + " cores=" + navigator.hardwareConcurrency);
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Dependências
+node_modules/
+
+# Saídas geradas e arquivos temporários
+dev/ensaio/out/
+dev/test/out/
+dev/spike/s2/spike-s2.html
+*.wav
+tmp-*
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.env*

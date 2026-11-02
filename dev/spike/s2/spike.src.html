@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spike S2 — Estúdio Bonequinho</title>
+<style>
+  :root { --bg:#0f1115; --fg:#e8eaf0; --mut:#9aa3b2; --acc:#2457d6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; display:flex; gap:24px; padding:16px; flex-wrap:wrap; }
+  #out { width:360px; height:640px; background:#000; border-radius:8px; }
+  .panel { flex:1; min-width:320px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:8px 14px; margin:0 6px 8px 0; cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  pre { background:#181b22; padding:12px; border-radius:8px; white-space:pre-wrap; max-height:520px; overflow:auto; font-size:12px; }
+  progress { width:100%; height:14px; }
+</style>
+</head>
+<body>
+<canvas id="out" width="1080" height="1920"></canvas>
+<div class="panel">
+  <h2 style="margin:0 0 8px">Spike S2</h2>
+  <div>
+    <button id="play">▶ Prévia</button>
+    <button id="ex5">Exportar 5 s</button>
+    <button id="ex90">Exportar 90 s</button>
+    <button id="cover">Capa JPG</button>
+  </div>
+  <progress id="prog" value="0" max="1"></progress>
+  <pre id="log"></pre>
+</div>
+
+<script>/*VENDOR*/</script>
+<script>
+"use strict";
+// ============================================================
+// Spike S2: núcleo do estúdio (Three.js + Canvas 2D + WebAudio + Mediabunny)
+// ============================================================
+const { THREE, addons, Mediabunny: MB } = window.BQV;
+const W = 1080, H = 1920, FPS = 30;
+const FONT_B64 = "/*FONT_B64*/";
+const VOICE_B64 = "/*VOICE_B64*/";
+const logEl = document.getElementById("log");
+const R = (window.__spike = { log: [], env: {}, exports: [] });
+function log(...a) { const s = a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "); R.log.push(s); logEl.textContent += s + "\n"; console.log("[S2]", s); }
+
+// ---------- utilidades determinísticas (portadas de R world.html 157-187) ----------
+const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const prog = (t, a, b) => clamp01((t - a) / (b - a));
+const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const lerp = (a, b, x) => a + (b - a) * x;
+const spring = (x) => (x <= 0 ? 0 : 1 - Math.exp(-6 * x) * Math.cos(9 * x));
+function track(t, keys) {
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 0; i < keys.length - 1; i++) {
+    const [ta, va] = keys[i], [tb, vb] = keys[i + 1];
+    if (t <= tb) {
+      const x = tb === ta ? 1 : easeInOut((t - ta) / (tb - ta));
+      return Array.isArray(va) ? va.map((v, j) => lerp(v, vb[j], x)) : lerp(va, vb, x);
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+
+// ---------- renderer 3D (WebGL em canvas fora da tela) ----------
+const glCanvas = document.createElement("canvas");
+glCanvas.width = W; glCanvas.height = H;
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H, false);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog("#dcecf8", 22, 60);
+const camera = new THREE.PerspectiveCamera(34, W / H, 0.05, 200);
+const composer = new addons.EffectComposer(renderer);
+composer.setPixelRatio(1);
+composer.setSize(W, H);
+composer.addPass(new addons.RenderPass(scene, camera));
+const bloom = new addons.UnrealBloomPass(new THREE.Vector2(W, H), 0.45, 0.28, 0.85);
+composer.addPass(bloom);
+composer.addPass(new addons.OutputPass());
+
+const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, metalness: 0, ...extra });
+const smooth = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0, ...extra });
+const shadowed = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
+const box = (w, h, d, m) => shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m));
+const cyl = (r, h, m, seg = 12, r2 = r) => shadowed(new THREE.Mesh(new THREE.CylinderGeometry(r, r2, h, seg), m));
+const sph = (r, m, seg = 16) => shadowed(new THREE.Mesh(new THREE.SphereGeometry(r, seg, Math.max(6, seg * 0.75)), m));
+
+// céu, luzes (R 354-381)
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(90, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { top: { value: new THREE.Color("#5fa8e8") }, bottom: { value: new THREE.Color("#e8f3fb") } },
+  vertexShader: "varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+  fragmentShader: "uniform vec3 top; uniform vec3 bottom; varying vec3 vP; void main(){ float h = clamp(vP.y*1.4+0.12,0.0,1.0); gl_FragColor = vec4(mix(bottom, top, pow(h,0.8)),1.0); }",
+})));
+scene.add(new THREE.HemisphereLight("#dbeeff", "#8aa36a", 1.25));
+const sun = new THREE.DirectionalLight("#fff1dc", 2.6);
+sun.position.set(6, 12, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8, near: 1, far: 40 });
+sun.shadow.bias = -0.0005;
+scene.add(sun, sun.target);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), mat("#7fae5a"));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+const wall = box(4.2, 2.8, 0.25, mat("#e9e6df"));
+wall.position.set(0.4, 1.4, -1.2);
+scene.add(wall);
+// alvo brilhante (testa o bloom)
+const orb = sph(0.11, new THREE.MeshStandardMaterial({ color: "#7cc4ff", emissive: "#3aa0ff", emissiveIntensity: 3.2 }), 20);
+orb.position.set(0.85, 1.35, -1.0);
+scene.add(orb);
+
+// ---------- bonequinho (porte direto de R makePerson 756-904, com roupa parametrizada) ----------
+const SKIN = smooth("#e0a882");
+function makePerson({ shirt = "#2457d6", pants = "#f4f4f2", shoes = "#ffffff", capColor = "#2457d6" } = {}) {
+  const shirtM = smooth(shirt), pantsM = smooth(pants), shoesM = smooth(shoes);
+  const g = new THREE.Group(), hips = new THREE.Group();
+  hips.position.y = 0.92; g.add(hips);
+  const cap = (r, len, m) => shadowed(new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), m));
+  const legs = [];
+  for (const s of [-1, 1]) {
+    const thigh = new THREE.Group(); thigh.position.set(s * 0.1, 0, 0);
+    const th = cap(0.07, 0.3, pantsM); th.position.y = -0.22; thigh.add(th);
+    const knee = new THREE.Group(); knee.position.y = -0.45;
+    const sh = cap(0.058, 0.3, pantsM); sh.position.y = -0.2; knee.add(sh);
+    const foot = shadowed(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.14, 4, 10), shoesM));
+    foot.rotation.x = Math.PI / 2; foot.position.set(0, -0.43, 0.05); knee.add(foot);
+    thigh.add(knee); hips.add(thigh); legs.push({ thigh, knee });
+  }
+  const torso = cap(0.17, 0.3, shirtM); torso.scale.set(1.18, 1, 0.78); torso.position.y = 0.32; hips.add(torso);
+  const belt = cyl(0.19, 0.06, smooth("#d9d9d6"), 16); belt.scale.set(1.05, 1, 0.75); belt.position.y = 0.06; hips.add(belt);
+  const neck = cyl(0.05, 0.1, SKIN, 10); neck.position.y = 0.63; hips.add(neck);
+  const head = new THREE.Group(); head.position.y = 0.8; hips.add(head);
+  const skull = sph(0.145, SKIN, 24); skull.scale.set(1, 1.08, 0.98); head.add(skull);
+  const eyeMat = smooth("#1b1b1f", { roughness: 0.3 }), eyes = [];
+  for (const s of [-1, 1]) {
+    const e = sph(0.021, eyeMat, 12); e.position.set(s * 0.052, 0.015, 0.128);
+    const hl = sph(0.007, new THREE.MeshBasicMaterial({ color: "#ffffff" }), 8); hl.position.set(0.006, 0.007, 0.018); e.add(hl);
+    head.add(e); eyes.push(e);
+    const brow = box(0.05, 0.012, 0.012, smooth("#3b2a1e")); brow.position.set(s * 0.053, 0.06, 0.132); brow.rotation.z = -s * 0.12; head.add(brow);
+    const ear = sph(0.03, SKIN, 10); ear.scale.set(0.6, 1, 0.8); ear.position.set(s * 0.145, 0, 0); head.add(ear);
+  }
+  const nose = sph(0.02, SKIN, 10); nose.position.set(0, -0.012, 0.145); head.add(nose);
+  const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 6, 16, Math.PI), smooth("#8a3b2e"));
+  mouth.rotation.z = Math.PI; mouth.position.set(0, -0.055, 0.128); head.add(mouth);
+  const capTop = shadowed(new THREE.Mesh(new THREE.SphereGeometry(0.152, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), smooth(capColor)));
+  capTop.position.y = 0.035;
+  const brim = cyl(0.13, 0.015, smooth(capColor), 16); brim.scale.set(1, 1, 0.75); brim.position.set(0, 0.04, 0.12);
+  head.add(capTop, brim);
+  const arms = [];
+  for (const s of [-1, 1]) {
+    const shoulder = new THREE.Group(); shoulder.position.set(s * 0.235, 0.52, 0);
+    const sleeve = cap(0.062, 0.1, shirtM); sleeve.position.y = -0.06;
+    const upper = cap(0.05, 0.18, SKIN); upper.position.y = -0.15;
+    shoulder.add(upper, sleeve);
+    const elbow = new THREE.Group(); elbow.position.y = -0.29;
+    const fore = cap(0.045, 0.17, SKIN); fore.position.y = -0.12; elbow.add(fore);
+    const hand = new THREE.Group(); hand.position.y = -0.27;
+    const palm = sph(0.05, SKIN, 12); palm.scale.set(0.8, 1.05, 0.6);
+    const thumb = cap(0.016, 0.03, SKIN); thumb.position.set(-s * 0.035, 0, 0.02); thumb.rotation.z = s * 0.6;
+    hand.add(palm, thumb); elbow.add(hand); shoulder.add(elbow); hips.add(shoulder);
+    arms.push({ shoulder, elbow, hand, side: s });
+  }
+  g.userData = { hips, torso, head, eyes, legs, arms };
+  return g;
+}
+// IK de dois ossos (R 931-966)
+const L1 = 0.29, L2 = 0.27, DOWN = new THREE.Vector3(0, -1, 0), IDQ = new THREE.Quaternion(), qU = new THREE.Quaternion(), qF = new THREE.Quaternion();
+function reach(who, arm, targetW, k) {
+  const { shoulder, elbow, side } = arm;
+  if (k <= 0.001) { shoulder.quaternion.identity(); elbow.quaternion.identity(); return; }
+  who.updateMatrixWorld(true);
+  const T = who.userData.hips.worldToLocal(targetW.clone());
+  const S = shoulder.position.clone(), v = T.clone().sub(S);
+  const d = Math.min(L1 + L2 - 0.002, Math.max(0.08, v.length())), dir = v.normalize();
+  const pole = new THREE.Vector3(side * 0.7, -1, -0.5).normalize();
+  let n = new THREE.Vector3().crossVectors(dir, pole); if (n.lengthSq() < 1e-6) n.set(1, 0, 0); n.normalize();
+  const a = Math.acos(Math.min(1, Math.max(-1, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d))));
+  const upperDir = dir.clone().applyAxisAngle(n, a);
+  qU.setFromUnitVectors(DOWN, upperDir);
+  const E = S.clone().addScaledVector(upperDir, L1), Td = S.clone().addScaledVector(dir, d);
+  const foreDir = Td.sub(E).normalize().applyQuaternion(qU.clone().invert());
+  qF.setFromUnitVectors(DOWN, foreDir);
+  shoulder.quaternion.slerpQuaternions(IDQ, qU, k);
+  elbow.quaternion.slerpQuaternions(IDQ, qF, k);
+}
+function animateBody(who, t, walk, seed) {
+  const u = who.userData, ph = t * 8.5 + seed, sw = Math.sin(ph) * walk;
+  u.legs.forEach((l, i) => { const s = i === 0 ? sw : -sw; l.thigh.rotation.x = 0.5 * s; l.knee.rotation.x = walk * 0.75 * Math.max(0, Math.sin(ph + (i === 0 ? 0.9 : 0.9 + Math.PI))); });
+  u.hips.position.y = 0.92 + 0.025 * Math.abs(Math.sin(ph)) * walk;
+  u.torso.scale.y = 1 + 0.012 * Math.sin(t * 2.1 + seed);
+  u.head.rotation.z = 0.03 * Math.sin(t * 0.9 + seed);
+  const bl = (t + seed * 0.37) % 3.4 < 0.13 ? 0.12 : 1;
+  u.eyes.forEach((e) => (e.scale.y = bl));
+  return sw;
+}
+function swingArms(who, sw, bend = 0.25) {
+  who.userData.arms.forEach((a, i) => {
+    a.shoulder.quaternion.setFromEuler(new THREE.Euler((i === 0 ? -sw : sw) * 0.45, 0, a.side * 0.08));
+    a.elbow.quaternion.setFromEuler(new THREE.Euler(-bend - 0.2 * Math.abs(sw), 0, 0));
+  });
+}
+const pintor = makePerson();
+scene.add(pintor);
+const morador = makePerson({ shirt: "#e76f51", pants: "#3a5a8c", shoes: "#2b2f36", capColor: "#4a2f1c" });
+morador.position.set(-1.1, 0, 0.2);
+scene.add(morador);
+
+// ---------- cena em função de t (ciclo de 6 s, determinístico) ----------
+const CYCLE = 6;
+const orbWorld = new THREE.Vector3();
+function updateScene(T) {
+  const t = T % CYCLE;
+  const walkK = 1 - prog(t, 1.6, 2.0) + prog(t, 4.8, 5.2);
+  const x = track(t, [[0, -0.2], [1.8, 0.55], [4.8, 0.55], [6, -0.2]]);
+  pintor.position.set(x, 0, -0.55);
+  pintor.rotation.y = track(t, [[0, Math.PI / 2], [1.8, Math.PI / 2], [2.2, Math.PI * 0.95], [4.6, Math.PI * 0.95], [5.0, -Math.PI / 2], [6, Math.PI / 2]]) + Math.PI;
+  const sw = animateBody(pintor, T, clamp01(walkK), 1.3);
+  swingArms(pintor, sw);
+  const k = prog(t, 2.0, 2.6) * (1 - prog(t, 4.2, 4.8));
+  orb.getWorldPosition(orbWorld);
+  reach(pintor, pintor.userData.arms[1], orbWorld, easeInOut(k));
+  const sw2 = animateBody(morador, T, 0, 4.1);
+  swingArms(morador, sw2, 0.3);
+  morador.rotation.y = 0.5 + 0.15 * Math.sin(T * 0.7);
+  orb.material.emissiveIntensity = 2.4 + 1.2 * Math.sin(T * 5);
+  // câmera por keyframes
+  const look = track(t, [[0, [0.1, 1.2, -0.6]], [2.2, [0.6, 1.3, -0.8]], [4.5, [0.6, 1.3, -0.8]], [6, [0.1, 1.2, -0.6]]]);
+  const dist = track(t, [[0, 6.2], [2.2, 3.6], [4.5, 3.6], [6, 6.2]]);
+  const ang = track(t, [[0, 0.25], [2.2, 0.55], [4.5, 0.45], [6, 0.25]]);
+  camera.position.set(look[0] + Math.sin(ang) * dist, look[1] + 0.35 + dist * 0.12, look[2] + Math.cos(ang) * dist);
+  camera.lookAt(look[0], look[1], look[2]);
+  camera.updateMatrixWorld();
+}
+
+// ---------- tela (Canvas 2D por cima do 3D) ----------
+const out = document.getElementById("out");
+const ctx = out.getContext("2d");
+const FONT = '"BarlowBQ", "Barlow Condensed", sans-serif';
+const WORDS = "Rebocou ontem. Já pode pintar? Ainda não. Vinte e oito dias de cura.".split(" ");
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function drawHud(T, { captions = true } = {}) {
+  const t = T % CYCLE;
+  // vinheta suave
+  const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.28)");
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  // título (card) com entrada em mola
+  const a = spring(prog(t, 0.1, 0.9)) * (1 - prog(t, 5.3, 5.7));
+  if (a > 0.001) {
+    ctx.save();
+    ctx.globalAlpha = clamp01(a);
+    ctx.translate(W / 2, 300); ctx.scale(0.9 + 0.1 * a, 0.9 + 0.1 * a);
+    ctx.fillStyle = "#0b1220"; roundRect(-430, -120, 860, 240, 36); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `800 64px ${FONT}`; ctx.fillText("REBOCOU ONTEM.", 0, -44);
+    ctx.font = `900 96px ${FONT}`; ctx.fillStyle = "#7fb0ff"; ctx.fillText("JÁ PODE PINTAR?", 0, 44);
+    ctx.restore();
+  }
+  // número gigante
+  const n = spring(prog(t, 2.5, 3.1)) * (1 - prog(t, 4.6, 5.0));
+  if (n > 0.001) {
+    ctx.save(); ctx.globalAlpha = clamp01(n); ctx.translate(820, 760); ctx.scale(n, n);
+    ctx.fillStyle = "#2457d6"; ctx.beginPath(); ctx.arc(0, 0, 150, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `900 170px ${FONT}`; ctx.fillText("28", 0, -10); ctx.font = `800 44px ${FONT}`; ctx.fillText("DIAS", 0, 92);
+    ctx.restore();
+  }
+  // callout preso ao ponto 3D (projeção)
+  const c = prog(t, 2.3, 2.6) * (1 - prog(t, 4.3, 4.6));
+  if (c > 0.001) {
+    const p = orbWorld.clone().project(camera);
+    const sx = (p.x * 0.5 + 0.5) * W, sy = (-p.y * 0.5 + 0.5) * H;
+    const lx = sx - 260, ly = sy - 220;
+    ctx.save(); ctx.globalAlpha = c; ctx.strokeStyle = "#fff"; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(lerp(sx, lx, c), lerp(sy, ly, c)); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(sx, sy, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#0b1220"; roundRect(lx - 120, ly - 50, 240, 100, 22); ctx.fill();
+    ctx.fillStyle = "#7cc4ff"; ctx.font = `800 64px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("ÁGUA", lx, ly + 2);
+    ctx.restore();
+  }
+  // legenda palavra a palavra (grupo de até 5 palavras)
+  if (captions) {
+    const per = CYCLE / WORDS.length, wi = Math.floor(t / per), g0 = Math.floor(wi / 5) * 5;
+    const grp = WORDS.slice(g0, g0 + 5);
+    ctx.save(); ctx.font = `800 70px ${FONT}`; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    const widths = grp.map((w) => ctx.measureText(w + " ").width), total = widths.reduce((s, v) => s + v, 0);
+    let x = W / 2 - total / 2; const y = 1480;
+    ctx.fillStyle = "rgba(11,18,32,0.78)"; roundRect(x - 30, y - 60, total + 50, 120, 24); ctx.fill();
+    grp.forEach((w, i) => { ctx.globalAlpha = g0 + i <= wi ? 1 : 0.45; ctx.fillStyle = /\d/.test(w) ? "#ffd166" : "#fff"; ctx.fillText(w, x, y); x += widths[i]; });
+    ctx.restore();
+  }
+}
+function frame(T, opts) {
+  updateScene(T);
+  composer.render();
+  ctx.drawImage(glCanvas, 0, 0, W, H);
+  drawHud(T, opts);
+}
+
+// ---------- áudio: síntese determinística + mix com a voz ----------
+const SR = 48000;
+function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6d2b79f5) >>> 0; let z = s; z = Math.imul(z ^ (z >>> 15), z | 1); z ^= z + Math.imul(z ^ (z >>> 7), z | 61); return ((z ^ (z >>> 14)) >>> 0) / 4294967296; }; }
+function synthWhoosh(dur = 0.6) {
+  const n = Math.floor(dur * SR), out = new Float32Array(n), r = rng(7);
+  let lp = 0, bp = 0;
+  for (let i = 0; i < n; i++) {
+    const x = i / n, env = Math.sin(Math.PI * Math.pow(x, 0.7)) ** 2;
+    const f = 300 + 2600 * Math.sin(Math.PI * x);
+    const k = 1 - Math.exp(-2 * Math.PI * f / SR);
+    const w = r() * 2 - 1; lp += k * (w - lp); bp += k * (lp - bp);
+    out[i] = (lp - bp) * env * 2.2;
+  }
+  return out;
+}
+function synthPop(dur = 0.18) {
+  const n = Math.floor(dur * SR), out = new Float32Array(n);
+  let ph = 0;
+  for (let i = 0; i < n; i++) { const x = i / SR, f = 900 * Math.exp(-x * 28) + 180; ph += 2 * Math.PI * f / SR; out[i] = Math.sin(ph) * Math.exp(-x * 30) * 0.9; }
+  return out;
+}
+function b64ToBuf(b64) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+let voiceBuf = null;
+async function loadVoice() {
+  if (voiceBuf || !VOICE_B64 || VOICE_B64.startsWith("/*")) return voiceBuf;
+  const ac = new OfflineAudioContext(1, SR, SR);
+  voiceBuf = await ac.decodeAudioData(b64ToBuf(VOICE_B64));
+  return voiceBuf;
+}
+async function mixAudio(duration) {
+  const len = Math.ceil(duration * SR);
+  const oac = new OfflineAudioContext(2, len, SR);
+  const voice = await loadVoice();
+  if (voice) { const s = oac.createBufferSource(); s.buffer = voice; s.connect(oac.destination); s.start(0); }
+  const sfx = [];
+  for (let c = 0; c * CYCLE < duration; c++) { sfx.push([c * CYCLE + 0.2, synthWhoosh(), 0.35]); sfx.push([c * CYCLE + 2.5, synthPop(), 0.4]); }
+  for (const [at, data, gain] of sfx) {
+    if (at >= duration) continue;
+    const b = oac.createBuffer(1, data.length, SR); b.copyToChannel(data, 0);
+    const s = oac.createBufferSource(); s.buffer = b; const g = oac.createGain(); g.gain.value = gain;
+    s.connect(g).connect(oac.destination); s.start(at);
+  }
+  return oac.startRendering();
+}
+
+// ---------- prévia em tempo real ----------
+let playing = false, actx = null, src = null, t0 = 0;
+document.getElementById("play").onclick = async () => {
+  if (playing) { playing = false; src && src.stop(); return; }
+  actx = actx || new AudioContext({ sampleRate: SR });
+  const buf = await mixAudio(30);
+  src = actx.createBufferSource(); src.buffer = buf; src.connect(actx.destination);
+  t0 = actx.currentTime + 0.05; src.start(t0); playing = true;
+  const loop = () => { if (!playing) return; const t = Math.max(0, actx.currentTime - t0); frame(t); if (t < 30) requestAnimationFrame(loop); else playing = false; };
+  loop();
+};
+
+// ---------- exportação determinística quadro a quadro ----------
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+async function pickVideoConfig() {
+  const cands = [
+    { codec: "avc", fullCodecString: "avc1.64002A", hardwareAcceleration: "prefer-hardware" },
+    { codec: "avc", fullCodecString: "avc1.64002A", hardwareAcceleration: "prefer-software" },
+    { codec: "avc", fullCodecString: "avc1.4D402A", hardwareAcceleration: "no-preference" },
+    { codec: "avc", fullCodecString: "avc1.42E02A", hardwareAcceleration: "no-preference" },
+  ];
+  for (const c of cands) {
+    const sup = await VideoEncoder.isConfigSupported({ codec: c.fullCodecString, width: W, height: H, bitrate: 10e6, framerate: FPS, hardwareAcceleration: c.hardwareAcceleration, avc: { format: "avc" } }).catch((e) => ({ supported: false, e: String(e) }));
+    if (sup.supported) return c;
+  }
+  return null;
+}
+async function exportMp4(seconds) {
+  const btns = [...document.querySelectorAll("button")]; btns.forEach((b) => (b.disabled = true));
+  const progEl = document.getElementById("prog");
+  const info = { seconds, startedAt: performance.now() };
+  try {
+    const vcfg = await pickVideoConfig();
+    if (!vcfg) throw new Error("Nenhuma configuração H.264 suportada");
+    info.video = vcfg;
+    // O AAC do Windows (Media Foundation) só aceita 96/128/160/192 kbps: testa em ordem.
+    info.audioCodec = null;
+    for (const [codec, br] of [["aac", 256e3], ["aac", 192e3], ["aac", 160e3], ["aac", 128e3], ["opus", 192e3]]) {
+      if (await MB.canEncodeAudio(codec, { numberOfChannels: 2, sampleRate: SR, bitrate: br })) { info.audioCodec = codec; info.audioBitrate = br; break; }
+    }
+    log(`export ${seconds}s · vídeo ${vcfg.fullCodecString} (${vcfg.hardwareAcceleration}) · áudio ${info.audioCodec}`);
+    const t0m = performance.now();
+    const audio = await mixAudio(seconds);
+    info.mixMs = Math.round(performance.now() - t0m);
+    const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: "in-memory" }), target: new MB.BufferTarget() });
+    const vsrc = new MB.CanvasSource(out, { codec: "avc", fullCodecString: vcfg.fullCodecString, bitrate: 10e6, keyFrameInterval: 2, hardwareAcceleration: vcfg.hardwareAcceleration, latencyMode: "quality" });
+    output.addVideoTrack(vsrc, { frameRate: FPS });
+    let asrc = null;
+    if (info.audioCodec) { asrc = new MB.AudioBufferSource({ codec: info.audioCodec, bitrate: info.audioBitrate }); output.addAudioTrack(asrc); }
+    await output.start();
+    if (asrc) await asrc.add(audio);
+    const n = Math.round(seconds * FPS);
+    let renderMs = 0, encMs = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / FPS;
+      const a = performance.now(); frame(t); const b = performance.now();
+      await vsrc.add(t, 1 / FPS);
+      const c = performance.now(); renderMs += b - a; encMs += c - b;
+      if (i % 15 === 0) { progEl.value = i / n; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    await output.finalize();
+    const buf = output.target.buffer;
+    info.totalMs = Math.round(performance.now() - info.startedAt);
+    info.bytes = buf.byteLength;
+    info.renderMsPerFrame = +(renderMs / n).toFixed(2);
+    info.encodeWaitMsPerFrame = +(encMs / n).toFixed(2);
+    info.realtimeFactor = +((info.totalMs / 1000) / seconds).toFixed(2);
+    progEl.value = 1;
+    R.exports.push(info);
+    log(info);
+    download(new Blob([buf], { type: "video/mp4" }), `spike-s2-${seconds}s.mp4`);
+  } catch (e) { info.error = String(e && e.stack || e); R.exports.push(info); log("ERRO", info.error); }
+  finally { btns.forEach((b) => (b.disabled = false)); }
+  return info;
+}
+document.getElementById("ex5").onclick = () => exportMp4(5);
+document.getElementById("ex90").onclick = () => exportMp4(90);
+document.getElementById("cover").onclick = () => { frame(0.6, { captions: false }); out.toBlob((b) => download(b, "spike-s2-capa.jpg"), "image/jpeg", 0.92); };
+R.exportMp4 = exportMp4;
+
+// ---------- boot ----------
+(async () => {
+  R.env = {
+    url: location.href.slice(0, 60), isSecureContext, crossOriginIsolated, userAgent: navigator.userAgent,
+    hasVideoEncoder: typeof VideoEncoder !== "undefined", hasAudioEncoder: typeof AudioEncoder !== "undefined",
+    webgl2: !!renderer.capabilities.isWebGL2, maxTex: renderer.capabilities.maxTextureSize,
+  };
+  try { R.env.gpu = renderer.getContext().getParameter(renderer.getContext().getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? 0x1F01); } catch {}
+  try {
+    R.env.canAac = await MB.canEncodeAudio("aac", { numberOfChannels: 2, sampleRate: SR });
+    R.env.canOpus = await MB.canEncodeAudio("opus", { numberOfChannels: 2, sampleRate: SR });
+    R.env.canAvc = await MB.canEncodeVideo("avc", { width: W, height: H });
+    R.env.videoConfig = await pickVideoConfig();
+  } catch (e) { R.env.codecErr = String(e); }
+  try { R.env.storage = { opfs: !!(navigator.storage && navigator.storage.getDirectory), caches: typeof caches !== "undefined" }; if (R.env.storage.opfs) { await navigator.storage.getDirectory(); R.env.storage.opfsOk = true; } } catch (e) { R.env.storage.opfsErr = String(e); }
+  try { localStorage.setItem("bq", "1"); R.env.localStorage = true; } catch (e) { R.env.localStorage = String(e); }
+  if (FONT_B64 && !FONT_B64.startsWith("/*")) { const ff = new FontFace("BarlowBQ", `url(data:font/woff2;base64,${FONT_B64})`, { weight: "800 900" }); await ff.load(); document.fonts.add(ff); }
+  await document.fonts.ready;
+  const a = performance.now(); frame(0.6); R.env.firstFrameMs = Math.round(performance.now() - a);
+  log(R.env);
+  R.ready = true;
+})();
+</script>
+</body>
+</html>

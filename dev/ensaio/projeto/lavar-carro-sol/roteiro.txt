@@ -1,0 +1,29 @@
+// Lavar o carro no sol forte mancha a pintura? (modo empresa: Brilho Auto Estética)
+// Fontes (não são narradas):
+// - Manchas de água: minerais da água (cálcio, magnésio) ficam na pintura quando a água evapora;
+//   guias de lavagem de fabricantes de produtos automotivos (Meguiar's, 3M, Vonixx). [VERIFICAR página exata]
+// - "Não aplicar sob sol direto nem em superfície quente": instrução comum em rótulos de xampu
+//   automotivo (ex.: Vonixx, Meguiar's). [VERIFICAR texto exato do rótulo]
+// - Lataria escura ao sol passando de 60 °C: medições de temperatura de superfície de carros
+//   (ex.: estudos de "cool car colors" do Lawrence Berkeley National Laboratory). [VERIFICAR número]
+// - Mancha antiga marcando o verniz: orientação comum de detalhamento automotivo. [VERIFICAR]
+# gancho
+Lavar o carro no sol [[forte]]forte mancha? [[sim]]Mancha, sim.
+# promessa
+[[promessa]]Mas dá para evitar. São {3|três} passos: sombra, por partes e secagem.
+# problema
+[[problema]]No sol, a lataria esquenta. A água [[evapora]]evapora antes do enxágue. O xampu [[xampu]]seca na pintura, e os minerais da água viram [[mancha]]manchas brancas. Com o tempo, marcam o verniz.
+# camada1
+[[c1]]Passo um: [[sombra]]sombra. Lave cedo ou no fim da tarde. [[mao]]Encoste a mão: a lataria tem que estar [[fria]]fria.
+# camada2
+[[c2]]Passo dois: por [[partes]]partes. Ensaboa e [[enxagua]]enxágua um painel de cada vez, de cima para baixo.
+# camada3
+[[c3]]Passo três: [[secar]]secar. Toalha de microfibra, antes que a água seque [[sozinha]]sozinha.
+# mito
+[[mito]]Mas o sol não ajuda a secar mais rápido? [[nao]]Não. Ao sol, lataria escura passa de [[graus]]{60 °C|sessenta graus}. A gota [[mancha2]]seca antes da toalha... e vira mancha.
+# fonte
+[[fonte]]Os rótulos de xampu automotivo pedem: nada de sol direto nem lataria quente.
+# cta
+[[cta]]Quer brilho sem mancha? Chama a Brilho Auto Estética. Orçamento no [[whats]]WhatsApp.
+# loop
+[[loop]]Então lembra: sombra, por partes e secagem. Porque lavar o carro no sol [[fim]]forte...

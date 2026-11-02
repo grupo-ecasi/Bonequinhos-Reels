@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Bonequinhos-Reels estudio api /*API*/">
+<title>Estúdio Bonequinho</title>
+<style>/*FONTS*/</style>
+<style>/*CSS*/</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brandmark">🎬 <span>Estúdio Bonequinho</span></div>
+    <h1 id="title">Carregando…</h1>
+    <div id="status" hidden></div>
+  </header>
+  <div id="preview-warn" hidden><b>⚠️ Você está vendo uma prévia (dentro de outro site).</b> Aqui a gravação, a narração enviada e a exportação podem não funcionar. <b>Baixe este arquivo e abra com dois cliques no Chrome ou no Edge do computador.</b></div>
+  <div id="problems" hidden></div>
+  <main>
+    <section class="stage">
+      <div class="screen"><canvas id="out" width="1080" height="1920"></canvas></div>
+      <div class="transport">
+        <button id="rew" title="Voltar ao início">⏮</button>
+        <button id="play" class="big" title="Tocar (Espaço)">▶</button>
+        <span id="time">0:00.0</span>
+      </div>
+      <div id="timeline" title="Clique ou arraste para navegar"></div>
+      <p class="hint">Espaço toca/pausa · ← → um quadro (Shift: 1 s)</p>
+    </section>
+    <aside class="panel">
+      <nav class="tabs">
+        <button data-tab="narracao" class="on">🎙️ Narração</button>
+        <button data-tab="marcas">⏱ Marcas</button>
+        <button data-tab="sons">🔊 Sons</button>
+        <button data-tab="exportar">⬇ Exportar</button>
+        <button data-tab="publicar">📝 Publicar</button>
+        <button data-tab="relatorio">🧾 Relatório</button>
+      </nav>
+
+      <div class="tab" id="tab-narracao">
+        <p id="voice-state" class="state"></p>
+        <div class="card">
+          <h3>1. Gravar aqui, bloco a bloco <span class="pill">recomendado</span></h3>
+          <p class="mut">Clique em <b>Gravar</b> no bloco, leia o texto que aparece e aperte <b>Espaço</b> ao terminar. Dá para regravar só um bloco. Use fone de ouvido e um lugar silencioso.</p>
+          <div id="narr-blocks"></div>
+        </div>
+        <div class="card">
+          <h3>2. Ou subir um áudio pronto</h3>
+          <p class="mut">Um arquivo com a narração inteira (MP3, WAV, M4A). Para subir por bloco, use o botão ⬆ de cada bloco acima.</p>
+          <label class="btn file">Escolher arquivo da narração<input type="file" id="full-file" accept="audio/*" hidden></label>
+          <p id="full-state" class="mut"></p>
+        </div>
+        <div class="card">
+          <h3>Texto da narração</h3>
+          <p class="mut"><b>Para ler em voz alta</b>: texto normal. <b>Para colar numa IA de voz</b>: números e siglas por extenso.</p>
+          <button id="copy-display">Copiar texto para ler</button>
+          <button id="copy-spoken">Copiar texto para IA de voz</button>
+        </div>
+      </div>
+
+      <div class="tab" id="tab-marcas" hidden>
+        <p class="mut">Cada marca é o instante em que algo acontece na cena. Se uma animação estiver adiantada ou atrasada em relação à fala, ajuste a marca (−/+ 0,05 s) ou use a sincronia por toque.</p>
+        <div class="row"><button id="tap-start">👆 Sincronizar no toque</button><button id="reset-offsets" class="ghost">Apagar ajustes</button></div>
+        <p id="tap-next" class="state"></p>
+        <div id="cue-list"></div>
+      </div>
+
+      <div class="tab" id="tab-sons" hidden>
+        <label class="row">Volume dos efeitos <input id="sfx-vol" type="range" min="-12" max="6" step="1" value="0"> <span id="sfx-vol-v">0 dB</span></label>
+        <div id="sfx-report"></div>
+      </div>
+
+      <div class="tab" id="tab-exportar" hidden>
+        <div class="card">
+          <h3>Vídeo MP4 (Reels 1080×1920)</h3>
+          <p class="mut">Leva mais ou menos o tempo do vídeo. Deixe esta aba aberta e na frente até terminar.</p>
+          <button id="exp-btn" class="primary">⬇ Exportar MP4</button>
+          <button id="exp-cancel" class="ghost" hidden>Cancelar</button>
+          <progress id="exp-prog" value="0" max="1"></progress>
+          <p id="exp-label" class="mut"></p>
+        </div>
+        <div class="card">
+          <h3>Outros arquivos</h3>
+          <button id="exp-cover">🖼 Capa (JPG)</button>
+          <button id="exp-sheet">🧩 Folha de contato (PNG)</button>
+          <button id="exp-caption">📝 Texto de publicação (TXT)</button>
+        </div>
+      </div>
+
+      <div class="tab" id="tab-publicar" hidden><div id="publish"></div></div>
+
+      <div class="tab" id="tab-relatorio" hidden>
+        <p class="mut">Para pedir ajustes ao Claude: baixe a <b>folha de contato</b>, copie o <b>relatório</b> e mande os dois no chat junto com o que você quer mudar.</p>
+        <div class="row"><button id="rep-copy" class="primary">Copiar relatório</button><button id="rep-sheet">🧩 Baixar folha de contato</button></div>
+        <pre id="rep-text"></pre>
+      </div>
+    </aside>
+  </main>
+</div>
+<div id="prompter" hidden>
+  <div class="pr-in">
+    <p id="prompter-block"></p>
+    <p id="prompter-text"></p>
+    <p id="prompter-status"></p>
+    <button id="prompter-stop" class="primary">■ Parar</button>
+  </div>
+</div>
+<div id="toast" hidden></div>
+<script type="application/json" id="bq-project">/*PROJECT*/</script>
+<!--SCRIPTS-->
+<script>BQ.boot();</script>
+</body>
+</html>

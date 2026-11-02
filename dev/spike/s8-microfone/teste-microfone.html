@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teste de microfone</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#0b1220; --mut:#5b6474; --acc:#2457d6; --ok:#15803d; --bad:#b91c1c; --card:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e8eaf0; --mut:#9aa3b2; --card:#181b22; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; display:flex; justify-content:center; padding:24px 16px; }
+  main { max-width:560px; width:100%; background:var(--card); border-radius:14px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,.08); }
+  h1 { font-size:22px; margin:0 0 8px; }
+  p { color:var(--mut); margin:0 0 16px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:10px; padding:14px 20px; font-size:17px; font-weight:700; cursor:pointer; width:100%; }
+  button:disabled { opacity:.55; cursor:default; }
+  .meter { height:14px; background:rgba(127,127,127,.2); border-radius:7px; overflow:hidden; margin:16px 0; }
+  .meter > div { height:100%; width:0; background:var(--ok); transition:width .05s; }
+  pre { background:rgba(127,127,127,.12); border-radius:10px; padding:12px; white-space:pre-wrap; font-size:13px; }
+  .ok { color:var(--ok); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+  audio { width:100%; margin-top:12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Teste de microfone do estúdio</h1>
+  <p>Clique no botão, permita o microfone e fale qualquer frase por 5 segundos. Depois ouça a gravação e copie o resultado para o Claude.</p>
+  <button id="rec">🎙️ Gravar 5 segundos</button>
+  <div class="meter"><div id="lvl"></div></div>
+  <div id="status"></div>
+  <audio id="play" controls hidden></audio>
+  <pre id="out">Aguardando…</pre>
+  <button id="copy" hidden>Copiar resultado</button>
+</main>
+<script>
+const out = document.getElementById("out"), status = document.getElementById("status");
+const res = { pagina: location.protocol, contextoSeguro: isSecureContext, navegador: navigator.userAgent.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/g)?.join(" ") };
+async function permissao() { try { return (await navigator.permissions.query({ name: "microphone" })).state; } catch { return "desconhecida"; } }
+(async () => { res.permissaoAoAbrir = await permissao(); out.textContent = JSON.stringify(res, null, 2); })();
+document.getElementById("rec").onclick = async () => {
+  const btn = document.getElementById("rec"); btn.disabled = true;
+  try {
+    const t0 = performance.now();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    res.tempoPermissaoMs = Math.round(performance.now() - t0);
+    res.microfone = stream.getAudioTracks()[0].label || "(sem nome)";
+    const ac = new AudioContext(), src = ac.createMediaStreamSource(stream), an = ac.createAnalyser(); an.fftSize = 1024; src.connect(an);
+    const buf = new Float32Array(an.fftSize); let pico = 0;
+    const tick = () => { an.getFloatTimeDomainData(buf); let m = 0; for (const v of buf) m = Math.max(m, Math.abs(v)); pico = Math.max(pico, m); document.getElementById("lvl").style.width = Math.min(100, m * 140) + "%"; if (btn.disabled) requestAnimationFrame(tick); };
+    tick();
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined), parts = [];
+    rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
+    const fim = new Promise((r) => (rec.onstop = r));
+    rec.start(); status.textContent = "Gravando… fale agora";
+    for (let s = 5; s > 0; s--) { status.textContent = `Gravando… ${s}`; await new Promise((r) => setTimeout(r, 1000)); }
+    rec.stop(); await fim; stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(parts, { type: rec.mimeType });
+    const audio = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
+    Object.assign(res, { formato: rec.mimeType, duracaoS: +audio.duration.toFixed(2), taxa: audio.sampleRate, canais: audio.numberOfChannels, picoNivel: +pico.toFixed(3), tamanhoKB: Math.round(blob.size / 1024) });
+    res.permissaoDepois = await permissao();
+    const ok = audio.duration > 4 && pico > 0.02;
+    status.innerHTML = ok ? '<span class="ok">✅ Funcionou. Ouça abaixo.</span>' : '<span class="bad">⚠️ Gravou, mas quase sem som. Confira o microfone.</span>';
+    const pl = document.getElementById("play"); pl.src = URL.createObjectURL(blob); pl.hidden = false;
+  } catch (e) {
+    res.erro = `${e.name}: ${e.message}`; status.innerHTML = `<span class="bad">❌ ${e.name}: ${e.message}</span>`;
+  }
+  out.textContent = JSON.stringify(res, null, 2);
+  document.getElementById("copy").hidden = false; btn.disabled = false; btn.textContent = "🎙️ Gravar de novo";
+};
+document.getElementById("copy").onclick = async () => { try { await navigator.clipboard.writeText(out.textContent); document.getElementById("copy").textContent = "Copiado ✓"; } catch { document.getElementById("copy").textContent = "Selecione o texto acima e copie"; } };
+</script>
+</body>
+</html>

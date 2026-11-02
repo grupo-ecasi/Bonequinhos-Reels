@@ -1,0 +1,13 @@
+{
+  "name": "bq-vendor",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "acorn": "^8.19.0",
+    "mediabunny": "1.65.0",
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

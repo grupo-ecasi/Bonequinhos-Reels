@@ -1,0 +1,9 @@
+{
+  "mode": "empresa",
+  "name": "Brilho Auto Estética",
+  "handle": "@brilhoautoestetica",
+  "whatsapp": "(11) 98888-7777",
+  "logo": "logo.svg",
+  "ctaText": "Orçamento no WhatsApp (11) 98888-7777",
+  "colors": { "accent": "#0e3a6e", "accentLight": "#ffd166", "ink": "#0a1d36", "success": "#16a34a", "danger": "#dc2626" }
+}

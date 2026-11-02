@@ -1,0 +1,15 @@
+// Exemplo curto (~30 s). Marcas [[...]] ficam no início da palavra seguinte.
+# gancho
+Regou todo dia e a planta [[morreu]]morreu?
+# promessa
+[[promessa]]São três sinais de água [[demais]]demais.
+# camada1
+[[c1]]Um: folha [[amarela]]amarela e mole.
+# camada2
+[[c2]]Dois: terra [[molhada]]molhada há dias.
+# camada3
+[[c3]]Três: [[cheiro]]cheiro azedo saindo do vaso.
+# mito
+[[mito]]Regar todo dia não é cuidado. Enfie o [[dedo]]dedo na terra: [[seca]]seca, rega. [[umida]]Úmida, espera.
+# loop
+[[loop]]Regou todo dia? Agora você sabe por que ela [[fim]]morreu.

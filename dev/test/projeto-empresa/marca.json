@@ -1,0 +1,8 @@
+{
+  "mode": "empresa",
+  "name": "Verde Vivo Jardinagem",
+  "handle": "@verdevivo.jardins",
+  "whatsapp": "(11) 90000-0000",
+  "logo": "logo.svg",
+  "colors": { "accent": "#1f7a4d", "accentLight": "#8fe3a8", "ink": "#0f2a1c" }
+}

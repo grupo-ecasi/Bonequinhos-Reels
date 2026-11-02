@@ -1,0 +1,21 @@
+// [marca ou segundos, deslocamento (s), "som", ganho (dB)]
+BQ.defineSfx(({ C }) => [
+  ["hook", 0.15, "whoosh-short", 0],
+  ["sim", 0, "impact-bass", -2],
+  ["promessa", 0.2, "swoosh", -2],
+  ["evapora", 0, "whoosh-short", -4],
+  ["mancha", 0, "error", -2],
+  ["c1", 0, "pop", 0],
+  ["sombra", 0, "whoosh", -2],
+  ["fria", 0.05, "ding", -3],
+  ["c2", 0, "pop", 0],
+  ["enxagua", 0.05, "drop", 0],
+  ["c3", 0, "pop", 0],
+  ["sozinha", 0.05, "sparkle", -3],
+  ["nao", 0, "buzz", -3],
+  ["graus", 0, "impact-bass", -3],
+  ["mancha2", 0, "error", -3],
+  ["fonte", 0, "page", 0],
+  ["cta", 0, "chime", -2],
+  ["loop", 0, "whoosh", -2],
+]);
